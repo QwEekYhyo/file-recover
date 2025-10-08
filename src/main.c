@@ -5,9 +5,10 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/stat.h>
 #include <sys/types.h>
 #include <unistd.h>
+
+#include "utils.h"
 
 #define CHUNK_SIZE    (4096 * 4)          // read size per iteration for scanning
 #define SIGN_LEN      8                   // PNG signature length
@@ -18,43 +19,6 @@
 #define PATH_MAX      20
 
 static const unsigned char png_sig[SIGN_LEN] = {0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A};
-
-static void print_hex_ascii(const unsigned char* buf, size_t len, uint64_t base_offset) {
-    printf("Offset 0x%016" PRIx64 " (%" PRIu64 "):\n", base_offset, base_offset);
-    for (size_t i = 0; i < len; i += 16) {
-        printf("%08zx  ", i);
-        for (size_t j = 0; j < 16; ++j) {
-            if (i + j < len) printf("%02X ", buf[i + j]);
-            else printf("   ");
-        }
-        printf(" ");
-        for (size_t j = 0; j < 16 && i + j < len; ++j) {
-            unsigned char c = buf[i + j];
-            putchar((c >= 32 && c <= 126) ? c : '.');
-        }
-        putchar('\n');
-    }
-    putchar('\n');
-}
-
-static uint32_t be32(const unsigned char* b) {
-    return ((uint32_t) b[0] << 24) | ((uint32_t) b[1] << 16) | ((uint32_t) b[2] << 8)
-           | ((uint32_t) b[3]);
-}
-
-static int ensure_imgs_dir(void) {
-    struct stat st;
-    if (stat("imgs", &st) == 0) {
-        if (S_ISDIR(st.st_mode)) return 0;
-        fprintf(stderr, "'imgs' exists but is not a directory\n");
-        return -1;
-    }
-    if (mkdir("imgs", 0755) != 0) {
-        perror("mkdir imgs");
-        return -1;
-    }
-    return 0;
-}
 
 // Extract a PNG starting at match_offset, write to ./imgs/img_{index}.png
 // Returns 0 on success, non-zero on failure.
@@ -194,8 +158,8 @@ static int extract_png(FILE* fp, uint64_t match_offset, size_t index) {
 }
 
 int main(int argc, char** argv) {
-    if (argc < 3 || argc > 4) {
-        fprintf(stderr, "Usage: %s <file-or-device> <max_matches> [start_offset]\n", argv[0]);
+    if (argc < 3 || argc > 5) {
+        fprintf(stderr, "Usage: %s <file-or-device> <max_matches> [start_offset] [max_offset]\n", argv[0]);
         return 1;
     }
 
@@ -207,9 +171,12 @@ int main(int argc, char** argv) {
     }
 
     uint64_t start_offset = 0;
-    if (argc == 4) {
+    uint64_t max_offset   = 10000000000;
+    if (argc >= 4)
         start_offset = strtoull(argv[3], NULL, 0);
-    }
+
+    if (argc == 5)
+        max_offset = strtoull(argv[4], NULL, 0);
 
     if (ensure_imgs_dir() != 0) return 2;
 
@@ -239,16 +206,19 @@ int main(int argc, char** argv) {
         return 5;
     }
 
-    uint64_t file_offset = start_offset; // offset of the start of current buffer in the file
+    uint64_t file_offset = start_offset;
     size_t read_bytes;
     size_t matches = 0;
 
     // Initial read
     read_bytes = fread(buf, 1, CHUNK_SIZE, fp);
 
-    while (read_bytes > 0 && matches < (size_t) max_matches) {
+    while (1) {
+        if (file_offset + read_bytes > max_offset)
+            read_bytes = max_offset - file_offset + 1;
+
         size_t search_limit = (read_bytes >= SIGN_LEN) ? (read_bytes - SIGN_LEN + 1) : 0;
-        for (size_t i = 0; i < search_limit && matches < (size_t) max_matches; ++i) {
+        for (size_t i = 0; i < search_limit && matches < (size_t) max_matches; i++) {
             if (memcmp(buf + i, png_sig, SIGN_LEN) == 0) {
                 uint64_t match_offset = file_offset + i;
                 printf(
@@ -303,6 +273,7 @@ int main(int argc, char** argv) {
         if (read_bytes >= OVERLAP) {
             memmove(buf, buf + read_bytes - OVERLAP, OVERLAP);
             size_t next_read = fread(buf + OVERLAP, 1, CHUNK_SIZE, fp);
+            if (next_read == 0) break;
             file_offset += read_bytes - OVERLAP;
             read_bytes = OVERLAP + next_read;
         } else {
@@ -313,6 +284,8 @@ int main(int argc, char** argv) {
             file_offset += read_bytes;
             read_bytes = read_bytes + next_read;
         }
+
+        if (file_offset + OVERLAP >= max_offset) break;
     }
 
     if (matches == 0) {
