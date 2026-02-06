@@ -1,309 +1,64 @@
-#define _FILE_OFFSET_BITS 64
-#include <errno.h>
-#include <inttypes.h>
-#include <stdint.h>
+#include "../include/signature.h"
 #include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <sys/types.h>
-#include <unistd.h>
 
-#include "utils.h"
+extern struct Signature signatures[];
 
-#define CHUNK_SIZE    (4096 * 4)          // read size per iteration for scanning
-#define SIGN_LEN      8                   // PNG signature length
-#define FOLLOW_BYTES  32                  // bytes to print after the signature (hex+ASCII)
-#define OVERLAP       (SIGN_LEN - 1)
-#define MAX_PNG_BYTES (200 * 1024 * 1024) // 200MB safety cap when extracting PNGs
+unsigned char blob[200] = {
+    0x13, 0xA7, 0x5C, 0x2E, 0x99, 0x01, 0x7F, 0xB4,
+    0x6D, 0xC1, 0x09, 0xFE, 0x20, 0x77, 0xE2, 0x19,
 
-#define PATH_MAX      20
+    /* PNG magic */
+    0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A,
 
-static const unsigned char png_sig[SIGN_LEN] = {0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A};
+    0xAB, 0x54, 0x90, 0x3C, 0x81, 0x25, 0x48, 0x6E,
+    0x04, 0x8C, 0xFA, 0x10, 0x63, 0x91, 0xEE, 0x37,
 
-// Extract a PNG starting at match_offset, write to ./imgs/img_{index}.png
-// Returns 0 on success, non-zero on failure.
-static int extract_png(FILE* fp, uint64_t match_offset, size_t index) {
-    char outpath[PATH_MAX];
-    snprintf(outpath, sizeof(outpath), "imgs/img_%zu.png", index);
+    /* JPEG magic */
+    0xFF, 0xD8, 0xFF,
 
-    // Seek to the start of PNG signature
-    if (fseeko(fp, (off_t) match_offset, SEEK_SET) != 0) {
-        fprintf(stderr, "fseeko to %" PRIu64 " failed: %s\n", match_offset, strerror(errno));
-        return -1;
-    }
+    0x5A, 0xC0, 0x48, 0x1D, 0xB2, 0x76, 0x0F, 0xA4,
+    0x69, 0xDC, 0x28, 0x83, 0x9E, 0x55, 0x11, 0x7A,
+    0xF1, 0x34, 0xC8, 0x02, 0xBE, 0x60, 0x8A, 0x14,
 
-    FILE* out = fopen(outpath, "wb");
-    if (!out) {
-        fprintf(stderr, "fopen(%s) failed: %s\n", outpath, strerror(errno));
-        return -1;
-    }
+    /* PDF magic */
+    0x25, 0x50, 0x44, 0x46,
 
-    unsigned char header[SIGN_LEN];
-    size_t got = fread(header, 1, SIGN_LEN, fp);
-    if (got != SIGN_LEN) {
-        fprintf(stderr, "Failed to read PNG signature from source (got %zu bytes)\n", got);
-        fclose(out);
-        return -1;
-    }
-    // write signature
-    if (fwrite(header, 1, SIGN_LEN, out) != SIGN_LEN) {
-        perror("fwrite signature");
-        fclose(out);
-        return -1;
-    }
+    0x97, 0xE9, 0x3F, 0x4C, 0xD0, 0x21, 0x6A, 0xB7,
+    0x58, 0xFD, 0x0B, 0x92, 0xA1, 0x73, 0xC5, 0x36,
+    0x18, 0x8F, 0xE4, 0x2C, 0x95, 0x4F, 0x7C, 0xD9,
+    0x61, 0xAA, 0x03, 0xBF, 0xE0, 0x52, 0x1B, 0x89,
+    0xC2, 0x74, 0x0E, 0xF8, 0xA9, 0x33, 0x6F, 
 
-    uint64_t bytes_copied = SIGN_LEN;
+    /* JPEG magic */
+    0xFF, 0xD8, 0xFF,
 
-    // Now iterate PNG chunks until we hit IEND (chunks: length(4) + type(4) +
-    // data(length) + crc(4))
-    while (1) {
-        unsigned char len_type[8];
-        // read 8 bytes: length (4) + type (4)
-        size_t r = fread(len_type, 1, 8, fp);
-        if (r != 8) {
-            fprintf(
-                stderr,
-                "Unexpected EOF or read error when reading chunk len/type (got "
-                "%zu bytes)\n",
-                r
-            );
-            fclose(out);
-            return -1;
-        }
-        if (fwrite(len_type, 1, 8, out) != 8) {
-            perror("fwrite len_type");
-            fclose(out);
-            return -1;
-        }
-        bytes_copied += 8;
+    /* PNG magic */
+    0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A,
 
-        uint32_t data_len  = be32(len_type);
-        char chunk_type[5] = {0};
-        memcpy(chunk_type, &len_type[4], 4);
+    0x5D, 0x88, 0xCE, 0x41, 0x9A, 0x07, 0xF3, 0x2D,
+    0xBC, 0x50, 0x16, 0xE1, 0x70, 0xCA, 0x84, 0x3A,
+    0xD6, 0x09, 0xAF, 0x62, 0x1E, 0x97, 0x4B, 0xF0,
+    0x28, 0x91, 0xC7, 0x5E, 0x0C, 0xED, 0x34, 0x8B,
+    0xA0, 0x7D, 0x19, 0xFE, 0x46, 0x63, 0xB8, 0x02
+};
 
-        // safety check on data_len
-        if (data_len > MAX_PNG_BYTES || (bytes_copied + data_len + 4) > MAX_PNG_BYTES) {
-            fprintf(
-                stderr,
-                "Chunk too large or would exceed MAX_PNG_BYTES (%u bytes) — "
-                "aborting extraction\n",
-                data_len
-            );
-            fclose(out);
-            return -1;
-        }
+int main(void) {
+    for (size_t i = 0; i < sizeof(blob); i++) {
+        for (size_t sig_index = 0; sig_index < N_SIGNATURE; sig_index++) {
+            struct Signature* sig = &signatures[sig_index];
 
-        // copy 'data_len' bytes
-        size_t to_copy     = data_len;
-        unsigned char* buf = malloc(CHUNK_SIZE);
-        if (!buf) {
-            fprintf(stderr, "malloc failed\n");
-            fclose(out);
-            return -1;
-        }
+            if (blob[i] == sig->buffer[sig->current_index]) {
+                sig->current_index++;
 
-        while (to_copy > 0) {
-            size_t step = (to_copy > CHUNK_SIZE) ? CHUNK_SIZE : to_copy;
-            size_t rr   = fread(buf, 1, step, fp);
-            if (rr != step) {
-                fprintf(
-                    stderr,
-                    "Unexpected EOF/err while reading chunk data (want %zu got "
-                    "%zu)\n",
-                    step,
-                    rr
-                );
-                free(buf);
-                fclose(out);
-                return -1;
-            }
-            if (fwrite(buf, 1, rr, out) != rr) {
-                perror("fwrite chunk data");
-                free(buf);
-                fclose(out);
-                return -1;
-            }
-            bytes_copied += rr;
-            to_copy -= rr;
-        }
-        free(buf);
-
-        // read and write CRC (4 bytes)
-        unsigned char crc[4];
-        size_t rc = fread(crc, 1, 4, fp);
-        if (rc != 4) {
-            fprintf(stderr, "Unexpected EOF/err while reading CRC (got %zu)\n", rc);
-            fclose(out);
-            return -1;
-        }
-        if (fwrite(crc, 1, 4, out) != 4) {
-            perror("fwrite crc");
-            fclose(out);
-            return -1;
-        }
-        bytes_copied += 4;
-
-        // If this was IEND, we are done
-        if (memcmp(chunk_type, "IEND", 4) == 0) {
-            printf("Extracted PNG to %s (%" PRIu64 " bytes)\n", outpath, bytes_copied);
-            fclose(out);
-            return 0;
-        }
-
-        // Continue to next chunk
-    }
-
-    // unreachable
-    // return 0;
-}
-
-int main(int argc, char** argv) {
-    if (argc < 3 || argc > 5) {
-        fprintf(stderr, "Usage: %s <file-or-device> <max_matches> [start_offset] [max_offset]\n", argv[0]);
-        return 1;
-    }
-
-    const char* path = argv[1];
-    long max_matches = strtol(argv[2], NULL, 10);
-    if (max_matches <= 0) {
-        fprintf(stderr, "max_matches must be > 0\n");
-        return 1;
-    }
-
-    uint64_t start_offset = 0;
-    uint64_t max_offset   = 10000000000;
-    if (argc >= 4)
-        start_offset = strtoull(argv[3], NULL, 0);
-
-    if (argc == 5)
-        max_offset = strtoull(argv[4], NULL, 0);
-
-    if (ensure_imgs_dir() != 0) return 2;
-
-    FILE* fp = fopen(path, "rb");
-    if (!fp) {
-        fprintf(stderr, "fopen(%s) failed: %s\n", path, strerror(errno));
-        return 3;
-    }
-
-    if (start_offset != 0ULL) {
-        if (fseeko(fp, (off_t) start_offset, SEEK_SET) != 0) {
-            fprintf(
-                stderr,
-                "fseeko to start_offset (%" PRIu64 ") failed: %s\n",
-                (uint64_t) start_offset,
-                strerror(errno)
-            );
-            fclose(fp);
-            return 4;
-        }
-    }
-
-    unsigned char* buf = malloc(CHUNK_SIZE + OVERLAP);
-    if (!buf) {
-        fprintf(stderr, "malloc failed\n");
-        fclose(fp);
-        return 5;
-    }
-
-    uint64_t file_offset = start_offset;
-    size_t read_bytes;
-    size_t matches = 0;
-
-    // Initial read
-    read_bytes = fread(buf, 1, CHUNK_SIZE, fp);
-
-    while (1) {
-        if (file_offset + read_bytes > max_offset)
-            read_bytes = max_offset - file_offset + 1;
-
-        size_t search_limit = (read_bytes >= SIGN_LEN) ? (read_bytes - SIGN_LEN + 1) : 0;
-        for (size_t i = 0; i < search_limit && matches < (size_t) max_matches; i++) {
-            if (memcmp(buf + i, png_sig, SIGN_LEN) == 0) {
-                uint64_t match_offset = file_offset + i;
-                printf(
-                    "PNG signature found at offset %" PRIu64 " (0x%016" PRIx64 ")\n",
-                    match_offset,
-                    match_offset
-                );
-
-                // Print signature + following FOLLOW_BYTES (safe read)
-                size_t to_read        = SIGN_LEN + FOLLOW_BYTES;
-                unsigned char* outbuf = malloc(to_read);
-                if (!outbuf) {
-                    fprintf(stderr, "malloc failed for outbuf\n");
-                    free(buf);
-                    fclose(fp);
-                    return 6;
+                if (sig->current_index == sig->size) {
+                    sig->current_index = 0;
+                    sig->handle_found(sig);
                 }
-
-                if (fseeko(fp, (off_t) match_offset, SEEK_SET) != 0) {
-                    fprintf(stderr, "fseeko failed: %s\n", strerror(errno));
-                    free(outbuf);
-                    free(buf);
-                    fclose(fp);
-                    return 7;
-                }
-
-                size_t got = fread(outbuf, 1, to_read, fp);
-                print_hex_ascii(outbuf, got, match_offset);
-                free(outbuf);
-
-                // Now extract the full PNG into imgs/img_{matches+1}.png
-                if (extract_png(fp, match_offset, matches + 1) != 0) {
-                    fprintf(stderr, "Failed to extract PNG at offset %" PRIu64 "\n", match_offset);
-                    // continue scanning anyway (but don't crash)
-                } else {
-                    matches++;
-                }
-
-                // After extraction, restore main scanning position:
-                if (fseeko(fp, (off_t) (file_offset + read_bytes), SEEK_SET) != 0) {
-                    fprintf(stderr, "fseeko restore failed: %s\n", strerror(errno));
-                    free(buf);
-                    fclose(fp);
-                    return 8;
-                }
+            } else {
+                sig->current_index = 0;
             }
         }
-
-        if (matches >= (size_t) max_matches) break;
-
-        // Prepare overlap and read next chunk
-        if (read_bytes >= OVERLAP) {
-            memmove(buf, buf + read_bytes - OVERLAP, OVERLAP);
-            size_t next_read = fread(buf + OVERLAP, 1, CHUNK_SIZE, fp);
-            if (next_read == 0) break;
-            file_offset += read_bytes - OVERLAP;
-            read_bytes = OVERLAP + next_read;
-        } else {
-            // very small tail case
-            memmove(buf, buf + read_bytes - read_bytes,
-                    read_bytes); // noop but explicit
-            size_t next_read = fread(buf + read_bytes, 1, CHUNK_SIZE, fp);
-            file_offset += read_bytes;
-            read_bytes = read_bytes + next_read;
-        }
-
-        if (file_offset + OVERLAP >= max_offset) break;
     }
 
-    if (matches == 0) {
-        printf(
-            "No PNG signature found in %s (from start_offset %" PRIu64 ")\n",
-            path,
-            (uint64_t) start_offset
-        );
-    } else {
-        printf(
-            "Total PNG signatures found/extracted: %zu (stopped at "
-            "max_matches=%ld)\n",
-            matches,
-            max_matches
-        );
-    }
-
-    free(buf);
-    fclose(fp);
     return 0;
 }
