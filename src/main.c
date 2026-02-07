@@ -1,64 +1,76 @@
-#include "../include/signature.h"
+#define _FILE_OFFSET_BITS 64
 #include <stdio.h>
+#include <stdlib.h>
+
+#include <signature.h>
+
+#define CHUNK_SIZE    16384
+#define OVERLAP       (MAX_SIGNATURE_LEN - 1)
 
 extern struct Signature signatures[];
 
-unsigned char blob[200] = {
-    0x13, 0xA7, 0x5C, 0x2E, 0x99, 0x01, 0x7F, 0xB4,
-    0x6D, 0xC1, 0x09, 0xFE, 0x20, 0x77, 0xE2, 0x19,
+int main(int argc, char** argv) {
+    if (argc < 2) {
+        fprintf(stderr, "Usage: %s <device>\n", argv[0]);
+        return 1;
+    }
 
-    /* PNG magic */
-    0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A,
+    FILE* block_device = fopen(argv[1], "rb");
+    if (!block_device) {
+        perror("fopen() failed on block device");
+        return 1;
+    }
 
-    0xAB, 0x54, 0x90, 0x3C, 0x81, 0x25, 0x48, 0x6E,
-    0x04, 0x8C, 0xFA, 0x10, 0x63, 0x91, 0xEE, 0x37,
+    unsigned char* window_buffer = malloc(CHUNK_SIZE * sizeof(char));
+    if (!window_buffer) {
+        perror("malloc() for window reading buffer failed");
+        fclose(block_device);
+        return 1;
+    }
 
-    /* JPEG magic */
-    0xFF, 0xD8, 0xFF,
+    for (;;) {
+        unsigned long bytes_read = fread(window_buffer, sizeof(window_buffer[0]), CHUNK_SIZE, block_device);
 
-    0x5A, 0xC0, 0x48, 0x1D, 0xB2, 0x76, 0x0F, 0xA4,
-    0x69, 0xDC, 0x28, 0x83, 0x9E, 0x55, 0x11, 0x7A,
-    0xF1, 0x34, 0xC8, 0x02, 0xBE, 0x60, 0x8A, 0x14,
+        if (!bytes_read) {
+            break;
+        }
 
-    /* PDF magic */
-    0x25, 0x50, 0x44, 0x46,
+        for (size_t i = 0; i < bytes_read; i++) {
+            for (size_t sig_index = 0; sig_index < N_SIGNATURE; sig_index++) {
+                struct Signature* sig = &signatures[sig_index];
 
-    0x97, 0xE9, 0x3F, 0x4C, 0xD0, 0x21, 0x6A, 0xB7,
-    0x58, 0xFD, 0x0B, 0x92, 0xA1, 0x73, 0xC5, 0x36,
-    0x18, 0x8F, 0xE4, 0x2C, 0x95, 0x4F, 0x7C, 0xD9,
-    0x61, 0xAA, 0x03, 0xBF, 0xE0, 0x52, 0x1B, 0x89,
-    0xC2, 0x74, 0x0E, 0xF8, 0xA9, 0x33, 0x6F, 
+                if (window_buffer[i] == sig->buffer[sig->current_index]) {
+                    sig->current_index++;
 
-    /* JPEG magic */
-    0xFF, 0xD8, 0xFF,
-
-    /* PNG magic */
-    0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A,
-
-    0x5D, 0x88, 0xCE, 0x41, 0x9A, 0x07, 0xF3, 0x2D,
-    0xBC, 0x50, 0x16, 0xE1, 0x70, 0xCA, 0x84, 0x3A,
-    0xD6, 0x09, 0xAF, 0x62, 0x1E, 0x97, 0x4B, 0xF0,
-    0x28, 0x91, 0xC7, 0x5E, 0x0C, 0xED, 0x34, 0x8B,
-    0xA0, 0x7D, 0x19, 0xFE, 0x46, 0x63, 0xB8, 0x02
-};
-
-int main(void) {
-    for (size_t i = 0; i < sizeof(blob); i++) {
-        for (size_t sig_index = 0; sig_index < N_SIGNATURE; sig_index++) {
-            struct Signature* sig = &signatures[sig_index];
-
-            if (blob[i] == sig->buffer[sig->current_index]) {
-                sig->current_index++;
-
-                if (sig->current_index == sig->size) {
+                    if (sig->current_index == sig->size) {
+                        reset_indices(signatures, N_SIGNATURE);
+                        sig->handle_found(sig);
+                    }
+                } else {
                     sig->current_index = 0;
-                    sig->handle_found(sig);
                 }
-            } else {
-                sig->current_index = 0;
             }
+        }
+        
+        if (bytes_read < CHUNK_SIZE) {
+            break;
+        }
+
+        // I am using a window overlap to avoid missing signatures that
+        // are separeted between two windows,
+        // problem is: the magic words don't all have the same length
+        // so shorter magic words like JPEG's could be found twice
+        // but this shouldn't be a problem when we are going to seek past the file
+        int error = fseeko(block_device, bytes_read - OVERLAP, SEEK_CUR);
+        if (error) {
+            perror("fseeko() before reading next window failed");
+            free(window_buffer);
+            fclose(block_device);
+            return 1;
         }
     }
 
+    free(window_buffer);
+    fclose(block_device);
     return 0;
 }

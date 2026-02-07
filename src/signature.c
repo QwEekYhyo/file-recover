@@ -1,4 +1,4 @@
-#include "../include/signature.h"
+#include <signature.h>
 
 #include <stdio.h>
 
@@ -39,3 +39,9 @@ struct Signature signatures[N_SIGNATURE] = {
         .handle_found = print_found,
     },
 };
+
+void reset_indices(struct Signature* signatures, size_t n) {
+    for (size_t i = 0; i < n; i++) {
+        signatures[i].current_index = 0;
+    }
+}

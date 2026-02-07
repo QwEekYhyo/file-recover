@@ -20,4 +20,6 @@ struct Signature {
     void (*handle_found)(struct Signature* sig);
 };
 
+void reset_indices(struct Signature* signatures, size_t n);
+
 #endif
