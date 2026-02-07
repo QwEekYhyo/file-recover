@@ -4,8 +4,8 @@
 
 #include <signature.h>
 
-#define CHUNK_SIZE    16384
-#define OVERLAP       (MAX_SIGNATURE_LEN - 1)
+#define CHUNK_SIZE 16384
+#define OVERLAP    (MAX_SIGNATURE_LEN - 1)
 
 extern struct Signature signatures[];
 
@@ -29,7 +29,8 @@ int main(int argc, char** argv) {
     }
 
     for (;;) {
-        unsigned long bytes_read = fread(window_buffer, sizeof(window_buffer[0]), CHUNK_SIZE, block_device);
+        unsigned long bytes_read =
+            fread(window_buffer, sizeof(window_buffer[0]), CHUNK_SIZE, block_device);
 
         if (!bytes_read) {
             break;
@@ -51,7 +52,7 @@ int main(int argc, char** argv) {
                 }
             }
         }
-        
+
         if (bytes_read < CHUNK_SIZE) {
             break;
         }

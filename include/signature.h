@@ -4,7 +4,7 @@
 #include <stddef.h>
 
 #define MAX_SIGNATURE_LEN 8
-#define N_SIGNATURE 3
+#define N_SIGNATURE       3
 
 enum FileType {
     PNG,
